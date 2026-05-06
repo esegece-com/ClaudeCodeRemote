@@ -1,0 +1,23 @@
+# Compiled binaries — ship via GitHub Releases, not the repo
+*.exe
+*.dll
+*.bpl
+*.dcp
+
+# Delphi build artifacts
+*.dcu
+*.rsm
+*.identcache
+*.stat
+*.local
+*.tvsconfig
+__history/
+__recovery/
+Win32/
+Win64/
+Debug/
+Release/
+
+# IDE
+*.~*
+*.dsk
