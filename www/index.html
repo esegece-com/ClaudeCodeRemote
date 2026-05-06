@@ -1,0 +1,2830 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Code Remote Terminal</title>
+
+  <!-- xterm.js from CDN -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.15.0/lib/addon-search.js"></script>
+
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg-primary: #0d1117;
+      --bg-secondary: #161b22;
+      --bg-tertiary: #1c2128;
+      --border: #30363d;
+      --border-focus: #58a6ff;
+      --text: #c9d1d9;
+      --text-muted: #8b949e;
+      --accent: #d4a574;
+      --accent-dim: #d4a57440;
+      --green: #3fb950;
+      --red: #f85149;
+      --red-dim: #f8514930;
+    }
+
+    body {
+      background: var(--bg-primary);
+      color: var(--text);
+      font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+      height: 100vh;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Top bar ────────────────────────────────────────────────────── */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border);
+      min-height: 44px;
+      flex-shrink: 0;
+      gap: 8px;
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .logo {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--accent);
+      letter-spacing: 0.5px;
+    }
+    .logo span { color: var(--text-muted); font-weight: 400; }
+
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .status-badge.connected    { background: #3fb95020; color: var(--green); border: 1px solid #3fb95040; }
+    .status-badge.disconnected { background: #f8514920; color: var(--red);   border: 1px solid #f8514940; }
+    .status-badge.connecting   { background: #d4a57420; color: var(--accent); border: 1px solid var(--accent-dim); }
+    .status-badge.auth         { background: #58a6ff20; color: #58a6ff;      border: 1px solid #58a6ff40; }
+
+    .status-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    .status-badge.connected .status-dot {
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .btn {
+      padding: 4px 8px;
+      border-radius: 6px;
+      white-space: nowrap;
+      border: 1px solid var(--border);
+      background: var(--bg-primary);
+      color: var(--text-muted);
+      font-size: 12px;
+      font-family: inherit;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn:hover { border-color: var(--text-muted); color: var(--text); }
+    .btn.btn-danger { border-color: #f8514940; color: var(--red); }
+    .btn.btn-danger:hover { background: #f8514920; }
+
+    .info-text { font-size: 11px; color: var(--text-muted); }
+
+    /* ── Mobile: hide non-essential header items ──────────────────────── */
+    @media (max-width: 640px) {
+      .header-left { gap: 6px; }
+      .header-right { gap: 4px; }
+      .logo span { display: none; }
+      .hide-mobile { display: none !important; }
+      .btn { padding: 4px 6px; font-size: 11px; }
+    }
+
+    /* ── Scroll-to-bottom FAB ──────────────────────────────────────── */
+    .scroll-fab {
+      position: absolute;
+      right: 16px;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: 1px solid var(--border);
+      background: var(--bg-secondary);
+      color: var(--accent);
+      font-size: 18px;
+      line-height: 34px;
+      text-align: center;
+      cursor: pointer;
+      z-index: 5;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    }
+    .scroll-fab.visible {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .scroll-bottom { bottom: 16px; }
+    .scroll-pgdn { bottom: 58px; }
+    .scroll-pgup { bottom: 100px; }
+
+    /* ── Terminal container ──────────────────────────────────────────── */
+    .terminal-wrap {
+      flex: 1;
+      min-height: 0;
+      padding: 4px;
+      overflow: hidden;
+      position: relative;
+    }
+    #terminal { width: 100%; height: 100%; }
+
+    /* ── Login overlay ──────────────────────────────────────────────── */
+    .login-overlay {
+      position: absolute;
+      inset: 0;
+      background: var(--bg-primary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 20;
+      transition: opacity 0.3s;
+    }
+    .login-overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .login-card {
+      width: 380px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 32px;
+      box-shadow: 0 16px 48px rgba(0,0,0,0.4);
+    }
+
+    .login-header {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+    .login-header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--accent);
+      margin-bottom: 6px;
+    }
+    .login-header p {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+    .form-group label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+    .form-group input {
+      width: 100%;
+      padding: 10px 14px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .form-group input:focus {
+      border-color: var(--border-focus);
+    }
+    .form-group input::placeholder {
+      color: #484f58;
+    }
+
+    .login-btn {
+      width: 100%;
+      padding: 12px;
+      border: none;
+      border-radius: 8px;
+      background: var(--accent);
+      color: var(--bg-primary);
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      margin-top: 8px;
+    }
+    .login-btn:hover { opacity: 0.9; }
+    .login-btn:active { transform: scale(0.98); }
+    .login-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .login-error {
+      margin-top: 14px;
+      padding: 10px 14px;
+      background: var(--red-dim);
+      border: 1px solid #f8514940;
+      border-radius: 8px;
+      color: var(--red);
+      font-size: 12px;
+      text-align: center;
+      display: none;
+    }
+    .login-error.visible { display: block; }
+
+    .login-info {
+      margin-top: 14px;
+      text-align: center;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .login-spinner {
+      display: inline-block;
+      width: 14px; height: 14px;
+      border: 2px solid var(--bg-primary);
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Disconnect overlay ──────────────────────────────────────────── */
+    .overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(13, 17, 23, 0.85);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      z-index: 10;
+      backdrop-filter: blur(4px);
+    }
+    .overlay.hidden { display: none; }
+    .overlay-icon { font-size: 48px; opacity: 0.6; }
+    .overlay-text { font-size: 14px; color: var(--text-muted); }
+    .overlay .btn {
+      padding: 8px 24px;
+      font-size: 14px;
+      border-color: var(--accent-dim);
+      color: var(--accent);
+    }
+    .overlay .btn:hover { background: var(--accent-dim); }
+
+    /* ── Lock icon SVG ──────────────────────────────────────────────── */
+    .lock-icon {
+      width: 40px; height: 40px;
+      margin: 0 auto 8px;
+      opacity: 0.5;
+    }
+
+    /* ── Mobile key toolbar ─────────────────────────────────────────── */
+    .key-toolbar {
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 4px;
+      padding: 6px 8px;
+      background: var(--bg-secondary);
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .key-btn {
+      padding: 8px 8px;
+      min-width: 0;
+      flex-shrink: 0;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--bg-tertiary);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      text-align: center;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+      transition: background 0.1s, border-color 0.1s;
+    }
+    .key-btn:active {
+      background: var(--accent-dim);
+      border-color: var(--accent);
+    }
+    .key-btn.sticky {
+      position: relative;
+    }
+    .key-btn.sticky.active {
+      background: var(--accent-dim);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .key-toolbar::-webkit-scrollbar { display: none; }
+    .key-toolbar { scrollbar-width: none; }
+    .key-sep {
+      width: 1px;
+      background: var(--border);
+      margin: 2px 2px;
+      align-self: stretch;
+    }
+
+    /* ── Help modal ────────────────────────────────────────────────────── */
+    .help-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(13, 17, 23, 0.85);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 30;
+      backdrop-filter: blur(4px);
+    }
+    .help-modal.hidden { display: none; }
+    .help-card {
+      width: 460px;
+      max-width: 90vw;
+      max-height: 80vh;
+      overflow-y: auto;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px 28px;
+      box-shadow: 0 16px 48px rgba(0,0,0,0.4);
+      position: relative;
+    }
+    .help-card h2 {
+      font-size: 16px;
+      color: var(--accent);
+      margin: 0 0 16px;
+    }
+    .help-card h3 {
+      font-size: 13px;
+      color: var(--text);
+      margin: 14px 0 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .help-card p, .help-card li {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.6;
+      margin: 4px 0;
+    }
+    .help-card ul { padding-left: 18px; margin: 4px 0 10px; }
+    .help-card kbd {
+      display: inline-block;
+      padding: 1px 6px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 12px;
+      color: var(--text);
+    }
+    .help-close {
+      position: absolute;
+      top: 12px;
+      right: 16px;
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 20px;
+      cursor: pointer;
+      padding: 4px 8px;
+      line-height: 1;
+    }
+    .help-close:hover { color: var(--text); }
+
+    /* ── Light theme ───────────────────────────────────────────────────── */
+    :root[data-theme="light"] {
+      --bg-primary: #ffffff;
+      --bg-secondary: #f6f8fa;
+      --bg-tertiary: #eaeef2;
+      --border: #d0d7de;
+      --border-focus: #0969da;
+      --text: #1f2328;
+      --text-muted: #656d76;
+      --accent: #b35900;
+      --accent-dim: #b3590040;
+      --green: #1a7f37;
+      --red: #cf222e;
+      --red-dim: #cf222e30;
+    }
+    .search-bar {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 6px 8px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      z-index: 6;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    .search-bar input {
+      width: 180px;
+      padding: 4px 8px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 12px;
+      outline: none;
+    }
+    .search-bar input:focus { border-color: var(--border-focus); }
+    .search-bar button {
+      padding: 2px 6px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text-muted);
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .search-bar button:hover { color: var(--text); border-color: var(--text-muted); }
+    .search-bar button.active { color: var(--accent); border-color: var(--accent); }
+
+    .btn.bell-on { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+
+    .idle-toast {
+      position: absolute;
+      top: 8px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 16px;
+      background: #d2992220;
+      border: 1px solid #d2992240;
+      border-radius: 8px;
+      color: #d29922;
+      font-size: 12px;
+      z-index: 6;
+      backdrop-filter: blur(4px);
+    }
+    .idle-toast button {
+      padding: 2px 8px;
+      background: var(--bg-tertiary);
+      border: 1px solid #d2992240;
+      border-radius: 4px;
+      color: #d29922;
+      font-size: 11px;
+      cursor: pointer;
+    }
+
+    .drop-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(13, 17, 23, 0.85);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 8;
+      border: 2px dashed var(--accent);
+      border-radius: 8px;
+      color: var(--accent);
+      font-size: 16px;
+      pointer-events: none;
+    }
+    .drop-overlay.hidden { display: none; }
+
+    .compact .header { display: none; }
+    .compact .status-pill {
+      position: fixed;
+      top: 6px;
+      right: 6px;
+      z-index: 15;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      font-size: 11px;
+      color: var(--text-muted);
+      opacity: 0.7;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .compact .status-pill:hover { opacity: 1; }
+    .status-pill { display: none; }
+
+    .terminal-watermark {
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+      font-size: 48px;
+      font-weight: 700;
+      color: var(--text-muted);
+      opacity: 0.03;
+      pointer-events: none;
+      z-index: 0;
+      user-select: none;
+      white-space: nowrap;
+      letter-spacing: 2px;
+    }
+
+    .cmd-panel {
+      display: none;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding: 4px 8px;
+      background: var(--bg-secondary);
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .cmd-panel.open { display: flex; }
+    .cmd-btn {
+      padding: 5px 10px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--bg-tertiary);
+      color: var(--accent);
+      font-family: inherit;
+      font-size: 11px;
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .cmd-btn:active { background: var(--accent-dim); border-color: var(--accent); }
+
+
+    .prompt-bar {
+      display: none;
+      padding: 4px 8px;
+      background: var(--bg-secondary);
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+      gap: 4px;
+    }
+    .prompt-bar.open { display: flex; }
+    .prompt-bar textarea {
+      flex: 1;
+      min-height: 36px;
+      max-height: 120px;
+      padding: 6px 10px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 13px;
+      resize: vertical;
+      outline: none;
+    }
+    .prompt-bar textarea:focus { border-color: var(--border-focus); }
+    .prompt-bar button {
+      padding: 6px 14px;
+      background: var(--accent);
+      color: var(--bg-primary);
+      border: none;
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      align-self: flex-end;
+    }
+    .prompt-bar button:active { opacity: 0.8; }
+
+    .key-btn.recording { background: #f8514930; border-color: #f85149; color: #f85149; animation: pulse 1s infinite; }
+
+    .upload-toast {
+      position: fixed;
+      bottom: 80px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 8px 16px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--green);
+      border-radius: 8px;
+      color: var(--green);
+      font-size: 12px;
+      z-index: 20;
+      animation: fadeIn 0.2s;
+    }
+
+    .snippets-popup {
+      position: fixed;
+      bottom: 50px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 340px;
+      max-width: 90vw;
+      max-height: 300px;
+      overflow-y: auto;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      z-index: 20;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }
+    .snippets-popup.hidden { display: none; }
+    .snippets-popup h3 {
+      font-size: 12px;
+      color: var(--accent);
+      margin: 0 0 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .snippet-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 8px;
+      margin-bottom: 4px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      color: var(--text);
+    }
+    .snippet-item:hover { border-color: var(--accent); }
+    .snippet-item span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .snippet-item .del { color: var(--red); font-size: 14px; cursor: pointer; padding: 0 4px; }
+    .snippet-add {
+      display: flex;
+      gap: 4px;
+      margin-top: 8px;
+    }
+    .snippet-add input {
+      flex: 1;
+      padding: 5px 8px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 12px;
+      outline: none;
+    }
+    .snippet-add button {
+      padding: 5px 10px;
+      background: var(--accent);
+      color: var(--bg-primary);
+      border: none;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    /* ── Session selector ────────────────────────────────────────────── */
+    .session-selector {
+      position: relative;
+    }
+    .session-input-row {
+      display: flex;
+      gap: 6px;
+    }
+    .session-input-row input {
+      flex: 1;
+    }
+    .session-input-row button {
+      padding: 6px 10px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-muted);
+      font-family: inherit;
+      font-size: 12px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .session-input-row button:hover { border-color: var(--text-muted); color: var(--text); }
+    .session-list {
+      display: none;
+      margin-top: 6px;
+      max-height: 150px;
+      overflow-y: auto;
+    }
+    .session-list.open { display: block; }
+    .session-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 7px 12px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.1s;
+      margin-bottom: 4px;
+    }
+    .session-item:hover { border-color: var(--border-focus); background: var(--bg-primary); }
+    .session-item.active { border-color: var(--accent); background: var(--accent-dim); }
+    .session-item-name { flex: 1; }
+    .session-item-date { font-size: 10px; color: var(--text-muted); margin: 0 8px; }
+    .session-item-del {
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 14px;
+      padding: 0 4px;
+    }
+    .session-item-del:hover { color: var(--red); }
+    .session-chip {
+      display: inline-block;
+      padding: 3px 10px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      color: var(--text-muted);
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .session-chip:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* ── Text-only panel ───────────────────────────────────────────────── */
+    .textonly-panel {
+      display: none;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+      background: var(--bg-primary);
+    }
+    .textonly-panel.active { display: flex; }
+    .textonly-sessions {
+      padding: 8px 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-secondary);
+      flex-shrink: 0;
+    }
+    .textonly-sessions-label {
+      font-size: 10px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      width: 100%;
+      margin-bottom: 2px;
+    }
+    .to-session-btn {
+      padding: 6px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg-tertiary);
+      color: var(--text-muted);
+      font-family: inherit;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .to-session-btn:hover { border-color: var(--text); color: var(--text); }
+    .to-session-btn.selected { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+    .textonly-input {
+      display: flex;
+      gap: 6px;
+      padding: 8px 12px;
+      border-top: 1px solid var(--border);
+      background: var(--bg-secondary);
+      flex-shrink: 0;
+    }
+    .textonly-input textarea {
+      flex: 1;
+      min-height: 40px;
+      max-height: 120px;
+      padding: 8px 12px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 14px;
+      resize: vertical;
+      outline: none;
+    }
+    .textonly-input textarea:focus { border-color: var(--border-focus); }
+    .textonly-input button {
+      padding: 8px 20px;
+      background: var(--accent);
+      color: var(--bg-primary);
+      border: none;
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      align-self: flex-end;
+    }
+    .textonly-cmds {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding: 6px 12px;
+      border-top: 1px solid var(--border);
+      background: var(--bg-secondary);
+      flex-shrink: 0;
+    }
+    /* ── Schedule section ──────────────────────────────────────────────── */
+    .schedule-section {
+      padding: 12px;
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .schedule-section h3 {
+      font-size: 11px;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin: 0 0 8px;
+    }
+    .schedule-form {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .schedule-form-row {
+      display: flex;
+      gap: 6px;
+    }
+    .schedule-form input, .schedule-form textarea {
+      flex: 1;
+      padding: 6px 10px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 12px;
+      outline: none;
+    }
+    .schedule-form input:focus, .schedule-form textarea:focus {
+      border-color: var(--border-focus);
+    }
+    .schedule-form textarea {
+      min-height: 40px;
+      resize: vertical;
+    }
+    .schedule-form button {
+      padding: 6px 14px;
+      background: var(--accent);
+      color: var(--bg-primary);
+      border: none;
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .sched-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 10px;
+      margin-bottom: 4px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 12px;
+      color: var(--text);
+    }
+    .sched-item-info { flex: 1; }
+    .sched-item-name { font-weight: 600; color: var(--accent); }
+    .sched-item.started { opacity: 0.6; border-color: var(--green); }
+    .sched-item.started .sched-item-name::after { content: ' \2713'; color: var(--green); }
+    .sched-item-time { font-size: 11px; color: var(--text-muted); margin-left: 8px; }
+    .sched-item-prompt { font-size: 11px; color: var(--text-muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 250px; }
+    .sched-item-del {
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 16px;
+      padding: 0 6px;
+      margin-left: 8px;
+    }
+    .sched-item-del:hover { color: var(--red); }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="header-left">
+      <a href="https://www.esegece.com" target="_blank" rel="noopener" class="logo" style="text-decoration:none;">Claude Code Remote <span>by www.esegece.com</span></a>
+      <div id="statusBadge" class="status-badge disconnected">
+        <div class="status-dot"></div>
+        <span id="statusText">Disconnected</span>
+      </div>
+      <span id="clientCount" class="info-text hide-mobile" style="display:none;"></span>
+      <span id="activityDot" style="display:none; width:8px; height:8px; border-radius:50%; background:#3fb950; margin-left:4px;"></span>
+      <span id="sessionName" class="info-text" style="display:none;"></span>
+    </div>
+    <div class="header-right">
+      <button class="btn" id="bellToggle" onclick="toggleNotifications()" title="Notifications OFF (click to enable)">&#128263;</button>
+      <span id="latencyDot" style="display:none; width:8px; height:8px; border-radius:50%; display:inline-block;" title=""></span>
+      <span id="dimensions" class="info-text hide-mobile"></span>
+      <button class="btn hide-mobile" onclick="cycleCursor()" title="Cursor style" id="cursorBtn">|</button>
+      <button class="btn hide-mobile" onclick="changeFontSize(-1)" title="Decrease font">A-</button>
+      <button class="btn hide-mobile" onclick="changeFontSize(1)" title="Increase font">A+</button>
+      <button class="btn hide-mobile" onclick="screenshotTerminal()" title="Screenshot terminal">Snap</button>
+      <button class="btn hide-mobile" onclick="downloadLog()" title="Download terminal log">Log</button>
+      <button class="btn hide-mobile" onclick="downloadHTML()" title="Export colored HTML">HTML</button>
+      <button class="btn" id="fullscreenBtn" onclick="toggleFullscreen()" title="Fullscreen">&#x26F6;</button>
+      <button class="btn" id="themeToggle" onclick="toggleTheme()" title="Toggle theme">&#9789;</button>
+      <button class="btn" onclick="toggleHelp()" title="Help">?</button>
+      <button class="btn hide-mobile" onclick="fitTerminal()" title="Fit terminal to window">Fit</button>
+      <button class="btn" onclick="toggleCompact()" title="Compact mode">&#x25A3;</button>
+      <button class="btn btn-danger" onclick="doLogout()" title="Disconnect and logout">Logout</button>
+    </div>
+  </div>
+
+  <div class="status-pill" onclick="toggleCompact()" title="Exit compact mode">
+    <span id="pillDot" style="width:6px;height:6px;border-radius:50%;background:var(--green);"></span>
+    <span id="pillText">Connected</span>
+  </div>
+
+  <div class="terminal-wrap">
+    <div id="terminal"></div>
+    <button id="scrollPgUp" class="scroll-fab scroll-pgup" onclick="scrollPageUp()" title="Page up">&#x25B2;</button>
+    <button id="scrollPgDn" class="scroll-fab scroll-pgdn" onclick="scrollPageDown()" title="Page down">&#x25BC;</button>
+    <button id="scrollBottom" class="scroll-fab scroll-bottom" onclick="scrollToBottom()" title="Scroll to bottom">&darr;</button>
+    <div id="dropOverlay" class="drop-overlay hidden">Drop file to paste content</div>
+    <div class="terminal-watermark">Claude Code Remote</div>
+    <div id="searchBar" class="search-bar" style="display:none;">
+      <input type="text" id="searchInput" placeholder="Search..." oninput="doSearch()">
+      <button onclick="searchPrev()" title="Previous">&#x25B2;</button>
+      <button onclick="searchNext()" title="Next">&#x25BC;</button>
+      <button id="searchCaseBtn" onclick="toggleSearchCase()" title="Case sensitive">Aa</button>
+      <button onclick="closeSearch()" title="Close">&times;</button>
+    </div>
+    <div id="idleToast" class="idle-toast" style="display:none;">
+      <span id="idleToastText">Session will expire soon due to inactivity.</span>
+      <button onclick="dismissIdleToast()">Dismiss</button>
+    </div>
+
+    <!-- Login overlay -->
+    <div id="loginOverlay" class="login-overlay">
+      <div class="login-card">
+        <div class="login-header">
+          <svg class="lock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            <circle cx="12" cy="16.5" r="1.5"/>
+          </svg>
+          <h1>Claude Code Remote</h1>
+          <p id="loginSubtext">Enter password to access the terminal</p>
+        </div>
+
+        <form id="loginForm" onsubmit="event.preventDefault(); doLogin();">
+        <div class="form-group">
+          <label for="loginPassword">Password</label>
+          <input type="password" id="loginPassword" placeholder="Enter password" enterkeyhint="go">
+        </div>
+
+        <div class="form-group">
+          <label>Session</label>
+          <div class="session-selector">
+            <div class="session-input-row">
+              <input type="text" id="loginSession" placeholder="Enter session name" value="" enterkeyhint="go">
+              <button type="button" id="toggleSessionList" onclick="toggleSessions()">Recent</button>
+            </div>
+            <div id="sessionList" class="session-list"></div>
+          </div>
+        </div>
+
+        <div id="serverSessions" style="display:none; margin-top:8px; margin-bottom:8px;">
+          <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Active on server</div>
+          <div id="serverSessionChips" style="display:flex; flex-wrap:wrap; gap:4px;"></div>
+        </div>
+
+        <div class="form-group" style="margin-bottom: 8px;">
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; text-transform: none; letter-spacing: normal; font-size: 13px;">
+            <input type="checkbox" id="skipPerms" checked style="width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer;">
+            Skip permission prompts
+          </label>
+        </div>
+
+
+        <button id="loginBtn" class="login-btn" type="submit">
+          Connect
+        </button>
+        </form>
+
+        <div id="loginError" class="login-error"></div>
+
+        <div id="loginInfo" class="login-info"></div>
+      </div>
+    </div>
+
+    <!-- Disconnected overlay (shown after logout or connection loss) -->
+    <div id="overlay" class="overlay hidden">
+      <div class="overlay-icon">&#9889;</div>
+      <div id="overlayText" class="overlay-text">Connection lost</div>
+      <div style="display:flex; gap:8px;">
+        <button class="btn" onclick="quickReconnect()">Reconnect</button>
+        <button class="btn" onclick="newSession()">New Session</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Text-only panel (hidden by default) -->
+  <div id="textonlyPanel" class="textonly-panel">
+    <div class="textonly-sessions">
+      <div class="textonly-sessions-label">Active Sessions</div>
+      <div id="toSessionList"></div>
+    </div>
+    <div class="textonly-cmds">
+      <button class="cmd-btn" onclick="toSendCmd('/clear')">/ clear</button>
+      <button class="cmd-btn" onclick="toSendCmd('/compact')">/ compact</button>
+      <button class="cmd-btn" onclick="toSendCmd('/help')">/ help</button>
+      <button class="cmd-btn" onclick="toSendCmd('/cost')">/ cost</button>
+      <button class="cmd-btn" onclick="toSendCmd('/status')">/ status</button>
+    </div>
+    <div class="schedule-section">
+      <h3>Scheduled Sessions</h3>
+      <div id="schedList"></div>
+      <div class="schedule-form">
+        <div class="schedule-form-row">
+          <input type="text" id="schedName" placeholder="Session name">
+        </div>
+        <div class="schedule-form-row">
+          <select id="schedTrigger" onchange="toggleSchedTrigger()" style="padding:6px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:12px;">
+            <option value="time">Start at time</option>
+            <option value="after">Start after session finishes</option>
+          </select>
+          <input type="datetime-local" id="schedTime">
+          <select id="schedAfter" style="display:none;flex:1;padding:6px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:12px;"></select>
+        </div>
+        <textarea id="schedPrompt" placeholder="Prompt to send when session starts..." rows="2"></textarea>
+        <div class="schedule-form-row">
+          <button onclick="scheduleSession()">Schedule</button>
+        </div>
+      </div>
+    </div>
+    <div class="textonly-input">
+      <textarea id="toInput" placeholder="Type your message..." rows="2"></textarea>
+      <button onclick="toSend()">Send</button>
+    </div>
+  </div>
+
+  <!-- Command panel -->
+  <div id="cmdPanel" class="cmd-panel">
+    <button class="cmd-btn" onclick="sendCmd('/clear')">/ clear</button>
+    <button class="cmd-btn" onclick="sendCmd('/compact')">/ compact</button>
+    <button class="cmd-btn" onclick="sendCmd('/help')">/ help</button>
+    <button class="cmd-btn" onclick="sendCmd('/cost')">/ cost</button>
+    <button class="cmd-btn" onclick="sendCmd('/model')">/ model</button>
+    <button class="cmd-btn" onclick="sendCmd('/status')">/ status</button>
+    <button class="cmd-btn" onclick="sendCmd('/review')">/ review</button>
+    <button class="cmd-btn" onclick="sendCmd('/init')">/ init</button>
+  </div>
+
+  <!-- Prompt input bar -->
+  <div id="promptBar" class="prompt-bar">
+    <textarea id="promptInput" placeholder="Type your prompt here..." rows="2"></textarea>
+    <button onclick="sendPrompt()">Send</button>
+  </div>
+
+  <!-- Mobile key toolbar -->
+  <div class="key-toolbar" id="keyToolbar">
+    <button class="key-btn" data-key="Escape">Esc</button>
+    <button class="key-btn" data-key="Tab">Tab</button>
+    <button class="key-btn" data-key="Enter">Intro</button>
+    <button class="key-btn sticky" data-modifier="ctrl" id="btnCtrl">Ctrl</button>
+    <button class="key-btn" data-key="ArrowUp">&uarr;</button>
+    <button class="key-btn" data-key="ArrowDown">&darr;</button>
+    <button class="key-btn" data-key="ArrowLeft">&larr;</button>
+    <button class="key-btn" data-key="ArrowRight">&rarr;</button>
+    <button class="key-btn" data-action="togglecmd">/</button>
+    <button class="key-btn" data-action="toggleprompt">Prompt</button>
+    <button class="key-btn" id="voiceBtn" data-action="voice">Mic</button>
+    <button class="key-btn" data-action="copy">Copy</button>
+    <button class="key-btn" data-key="clear">Clr</button>
+    <button class="key-btn" data-action="fontdown">A-</button>
+    <button class="key-btn" data-action="fontup">A+</button>
+    <button class="key-btn" data-action="upload">Upload</button>
+    <button class="key-btn" data-action="snippets">Snip</button>
+  </div>
+
+  <!-- Help modal -->
+  <div id="helpModal" class="help-modal hidden">
+    <div class="help-card">
+      <button class="help-close" onclick="toggleHelp()">&times;</button>
+      <h2>Claude Code Remote Help</h2>
+
+      <h3>Key Toolbar</h3>
+      <p>The bottom toolbar provides keys commonly needed by Claude Code:</p>
+      <ul>
+        <li><kbd>Esc</kbd> — Cancel current operation</li>
+        <li><kbd>Tab</kbd> — Accept suggestions / autocomplete</li>
+        <li><kbd>Intro</kbd> — Enter / confirm input</li>
+        <li><kbd>Ctrl</kbd> — Sticky modifier: tap once, then tap a letter (e.g. Ctrl+C to interrupt)</li>
+        <li><kbd>&uarr;</kbd> <kbd>&darr;</kbd> <kbd>&larr;</kbd> <kbd>&rarr;</kbd> — Navigate history and menus</li>
+        <li><kbd>Copy</kbd> — Copy selected terminal text to clipboard</li>
+        <li><kbd>Clr</kbd> — Clear terminal screen (Ctrl+L)</li>
+      </ul>
+
+      <h3>Copy &amp; Paste</h3>
+      <ul>
+        <li><strong>Copy:</strong> Select text in the terminal, then use <kbd>Copy</kbd> button or <kbd>Ctrl+C</kbd> (when text is selected)</li>
+        <li><strong>Paste:</strong> Use <kbd>Ctrl+V</kbd> or your device's paste function</li>
+      </ul>
+
+      <h3>Sessions</h3>
+      <p>Each session runs a separate Claude Code instance. Multiple users can join the same session to collaborate in real time. Session names are chosen at login.</p>
+
+      <h3>Connection</h3>
+      <p>If the connection drops, use <strong>Reconnect</strong> to auto-rejoin with saved credentials, or <strong>New Session</strong> to start fresh.</p>
+
+      <h3>Keyboard Shortcuts</h3>
+      <ul>
+        <li><kbd>Ctrl+F</kbd> — Search in terminal output</li>
+        <li><kbd>Escape</kbd> — Close search bar</li>
+        <li><kbd>Ctrl+C</kbd> — Copy selected text (or interrupt if nothing selected)</li>
+        <li><kbd>Ctrl+V</kbd> — Paste from clipboard</li>
+        <li><kbd>Ctrl+/</kbd> — Show this help</li>
+      </ul>
+    </div>
+  </div>
+
+  <div id="snippetsPopup" class="snippets-popup hidden">
+    <h3>Saved Snippets</h3>
+    <div id="snippetsList"></div>
+    <div class="snippet-add">
+      <input type="text" id="snippetInput" placeholder="Add new snippet...">
+      <button onclick="addSnippet()">Add</button>
+    </div>
+  </div>
+
+<script>
+(function() {
+  'use strict';
+
+  // ── Configuration ──────────────────────────────────────────────────
+  const WS_URL = `ws://${location.hostname}:${location.port}`;
+  const RECONNECT_INITIAL = 1000;
+  const RECONNECT_MAX = 30000;
+  let reconnectDelay = RECONNECT_INITIAL;
+
+  // ── State ──────────────────────────────────────────────────────────
+  let ws = null;
+  let term = null;
+  let fitAddon = null;
+  let connected = false;
+  let authenticated = false;
+  let authRequired = false;
+  let authTimeout = 15;
+  let reconnectTimer = null;
+  let pingTime = 0;
+  let sessionToken = null;
+  let lastPassword = '';
+  let lastSkipPerms = true;
+  let lastSession = 'default';
+  let authCountdownTimer = null;
+  let blockCountdownTimer = null;
+  let resizeTimer = null;
+  let termReady = false;
+  let pendingOutput = [];
+  let notificationsEnabled = localStorage.getItem('ccr_notifications') === 'true';
+  let promptMode = false;
+  let textOnlyMode = false;
+  let searchAddon = null;
+  let searchCaseSensitive = false;
+  let fontSize = parseInt(localStorage.getItem('ccr_fontSize')) || 14;
+  var cursorStyles = ['bar', 'block', 'underline'];
+  var cursorIndex = cursorStyles.indexOf(localStorage.getItem('ccr_cursor') || 'bar');
+  if (cursorIndex < 0) cursorIndex = 0;
+
+  // ── DOM refs ───────────────────────────────────────────────────────
+  const statusBadge    = document.getElementById('statusBadge');
+  const statusText     = document.getElementById('statusText');
+  const overlay        = document.getElementById('overlay');
+  const overlayText    = document.getElementById('overlayText');
+  const dimensionsEl   = document.getElementById('dimensions');
+  const loginOverlay   = document.getElementById('loginOverlay');
+  const loginPassword  = document.getElementById('loginPassword');
+  const loginBtn       = document.getElementById('loginBtn');
+  const loginError     = document.getElementById('loginError');
+  const loginInfo      = document.getElementById('loginInfo');
+  const loginSubtext   = document.getElementById('loginSubtext');
+  const sessionNameEl  = document.getElementById('sessionName');
+
+  // ── Terminal setup ─────────────────────────────────────────────────
+  function initTerminal() {
+    term = new Terminal({
+      cursorBlink: true,
+      cursorStyle: cursorStyles[cursorIndex],
+      fontSize: fontSize,
+      fontFamily: '"Cascadia Code", "Fira Code", "JetBrains Mono", "SF Mono", monospace',
+      lineHeight: 1.2,
+      theme: {
+        background: '#0d1117',
+        foreground: '#c9d1d9',
+        cursor: '#d4a574',
+        cursorAccent: '#0d1117',
+        selectionBackground: '#264f78',
+        selectionForeground: '#ffffff',
+        black:   '#484f58',
+        red:     '#ff7b72',
+        green:   '#3fb950',
+        yellow:  '#d29922',
+        blue:    '#58a6ff',
+        magenta: '#bc8cff',
+        cyan:    '#39d353',
+        white:   '#b1bac4',
+        brightBlack:   '#6e7681',
+        brightRed:     '#ffa198',
+        brightGreen:   '#56d364',
+        brightYellow:  '#e3b341',
+        brightBlue:    '#79c0ff',
+        brightMagenta: '#d2a8ff',
+        brightCyan:    '#56d364',
+        brightWhite:   '#f0f6fc',
+      },
+      allowProposedApi: true,
+      scrollback: 10000,
+    });
+
+    fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.loadAddon(new WebLinksAddon.WebLinksAddon());
+    searchAddon = new SearchAddon.SearchAddon();
+    term.loadAddon(searchAddon);
+
+    term.open(document.getElementById('terminal'));
+    fitAddon.fit();
+
+    term.onBell(function() {
+      var origTitle = document.title;
+      document.title = '* Claude Code Remote';
+      setTimeout(function() { document.title = origTitle; }, 2000);
+    });
+
+    term.onData(function(data) {
+      if (!authenticated) return;
+      if (promptMode) {
+        // Redirect keyboard input to prompt bar
+        var pi = document.getElementById('promptInput');
+        var bar = document.getElementById('promptBar');
+        if (!bar.classList.contains('open')) bar.classList.add('open');
+        pi.focus();
+        return;
+      }
+      sendInput(data);
+    });
+
+    term.onBinary(function(data) {
+      if (authenticated) sendInput(data);
+    });
+
+    term.onResize(function(size) {
+      if (textOnlyMode) return; // Don't resize in text-only mode
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(function() {
+        if (authenticated) sendResize(size.cols, size.rows);
+      }, 200);
+      dimensionsEl.textContent = `${size.cols}\u00d7${size.rows}`;
+    });
+
+    dimensionsEl.textContent = `${term.cols}\u00d7${term.rows}`;
+
+    // Auto-scroll pause on text selection
+    var userHasSelection = false;
+    term.onSelectionChange(function() {
+      userHasSelection = term.hasSelection();
+    });
+
+    window.addEventListener('resize', debounce(function() {
+      fitTerminal();
+    }, 150));
+  }
+
+  // ── Login ──────────────────────────────────────────────────────────
+  function showLogin(message) {
+    loginOverlay.classList.remove('hidden');
+    overlay.classList.add('hidden');
+    loginBtn.disabled = false;
+    loginBtn.textContent = 'Connect';
+    loginError.classList.remove('visible');
+    loginPassword.value = '';
+
+    if (message) {
+      loginSubtext.textContent = message;
+    } else {
+      loginSubtext.textContent = 'Enter password to access the terminal';
+    }
+
+    setTimeout(function() {
+      loginPassword.focus();
+    }, 100);
+  }
+
+  function hideLogin() {
+    if (authCountdownTimer) { clearInterval(authCountdownTimer); authCountdownTimer = null; }
+    loginOverlay.classList.add('hidden');
+    document.getElementById('serverSessions').style.display = 'none';
+  }
+
+  function showLoginError(msg) {
+    loginError.textContent = msg;
+    loginError.classList.add('visible');
+    loginBtn.disabled = false;
+    loginBtn.textContent = 'Connect';
+    loginPassword.value = '';
+    loginPassword.focus();
+  }
+
+  window.doLogin = function() {
+    const pass = loginPassword.value;
+
+    if (!pass) {
+      showLoginError('Please enter password.');
+      return;
+    }
+
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      showLoginError('Not connected to server. Reconnecting...');
+      reconnect();
+      return;
+    }
+
+    if (authCountdownTimer) { clearInterval(authCountdownTimer); authCountdownTimer = null; }
+    loginBtn.disabled = true;
+    loginBtn.innerHTML = '<span class="login-spinner"></span>Authenticating...';
+    loginError.classList.remove('visible');
+
+    var session = document.getElementById('loginSession').value.trim() || 'default';
+    lastSession = session;
+    toCurrentSession = session;
+    saveSession(session);
+    var skipPerms = document.getElementById('skipPerms').checked;
+    textOnlyMode = (session.toLowerCase() === 'admin');
+    lastPassword = pass;
+    lastSkipPerms = skipPerms;
+    ws.send(JSON.stringify({
+      type: 'auth',
+      password: pass,
+      session: session,
+      skipPermissions: skipPerms,
+      textOnly: textOnlyMode
+    }));
+  };
+
+  window.doLogout = function() {
+    sessionToken = null;
+    authenticated = false;
+    termReady = false;
+    pendingOutput = [];
+    lastPassword = '';
+    textOnlyMode = false;
+    document.querySelector('.terminal-wrap').style.display = '';
+    document.getElementById('textonlyPanel').classList.remove('active');
+    document.getElementById('cmdPanel').style.display = '';
+    document.querySelector('.key-toolbar').style.display = '';
+    document.getElementById('promptBar').style.display = '';
+    sessionNameEl.style.display = 'none';
+    if (ws) {
+      ws.close();
+      ws = null;
+    }
+    if (term) term.clear();
+    showLogin('Logged out. Enter password to reconnect.');
+    setStatus('disconnected');
+  };
+
+  document.getElementById('loginSession').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      loginBtn.focus();
+    }
+  });
+
+  // ── WebSocket ──────────────────────────────────────────────────────
+  function connect() {
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+
+    setStatus('connecting');
+
+    try {
+      ws = new WebSocket(WS_URL);
+      ws.binaryType = 'arraybuffer';
+    } catch (e) {
+      setStatus('disconnected');
+      scheduleReconnect();
+      return;
+    }
+
+    ws.onopen = function() {
+      connected = true;
+      pingTime = performance.now();
+      // Don't set 'connected' status yet — wait for auth flow
+    };
+
+    ws.onmessage = function(event) {
+      if (event.data instanceof ArrayBuffer) {
+        // Binary frame: terminal output (only render if authenticated)
+        if (authenticated) {
+          const text = new TextDecoder('utf-8').decode(event.data);
+          if (termReady) {
+            if (term) term.write(text);
+          } else {
+            // Buffer output until terminal is fitted
+            pendingOutput.push(text);
+          }
+          if (document.hidden && notificationsEnabled) notifyActivity();
+        }
+
+        const now = performance.now();
+        if (pingTime > 0) {
+          var lat = Math.round(now - pingTime);
+          if (lat < 5000) {
+            var ldot = document.getElementById('latencyDot');
+            ldot.style.display = 'inline-block';
+            ldot.style.background = lat < 100 ? '#3fb950' : lat < 300 ? '#d29922' : '#f85149';
+            ldot.title = lat + 'ms';
+          }
+          pingTime = now;
+        }
+      } else {
+        // Text frame: JSON control messages
+        handleControlMessage(event.data);
+      }
+    };
+
+    ws.onclose = function(event) {
+      connected = false;
+      if (authenticated) {
+        // Was authenticated, lost connection
+        setStatus('disconnected');
+        overlay.classList.remove('hidden');
+        overlayText.textContent = 'Connection lost. Click to reconnect.';
+      } else {
+        setStatus('disconnected');
+      }
+      scheduleReconnect();
+    };
+
+    ws.onerror = function() {
+      connected = false;
+      setStatus('disconnected');
+    };
+  }
+
+  function handleControlMessage(raw) {
+    let msg;
+    try {
+      msg = JSON.parse(raw);
+    } catch(e) {
+      if (authenticated && term) term.write(raw);
+      return;
+    }
+
+    switch (msg.type) {
+
+      case 'auth_required':
+        // Server requires authentication
+        authRequired = true;
+        authTimeout = msg.timeout || 15;
+        if (lastPassword) {
+          // Auto-authenticate with saved credentials
+          setStatus('connecting');
+          ws.send(JSON.stringify({
+            type: 'auth',
+            password: lastPassword,
+            session: lastSession,
+            skipPermissions: lastSkipPerms,
+            textOnly: textOnlyMode
+          }));
+        } else {
+          setStatus('auth');
+          showLogin();
+          var remaining = authTimeout;
+          loginInfo.textContent = 'Authentication timeout: ' + remaining + 's';
+          clearInterval(authCountdownTimer);
+          authCountdownTimer = setInterval(function() {
+            remaining--;
+            if (remaining > 0) {
+              loginInfo.textContent = 'Authentication timeout: ' + remaining + 's';
+            } else {
+              clearInterval(authCountdownTimer);
+              authCountdownTimer = null;
+              loginInfo.textContent = 'Authentication timed out. Click Connect to retry.';
+            }
+          }, 1000);
+          // Store sessions for text-only mode
+          if (msg.sessions) {
+            toServerSessions = msg.sessions;
+          }
+          // Show server sessions if available
+          if (msg.sessions && msg.sessions.length > 0) {
+            var container = document.getElementById('serverSessions');
+            var chips = document.getElementById('serverSessionChips');
+            chips.innerHTML = '';
+            msg.sessions.forEach(function(name) {
+              var chip = document.createElement('span');
+              chip.className = 'session-chip';
+              chip.textContent = name;
+              chip.onclick = function() { document.getElementById('loginSession').value = name; };
+              chips.appendChild(chip);
+            });
+            container.style.display = '';
+          }
+        }
+        break;
+
+      case 'auth_result':
+        if (msg.success) {
+          // Authentication successful
+          authenticated = true;
+          reconnectDelay = RECONNECT_INITIAL;
+          sessionToken = msg.token || null;
+          setStatus('connected');
+          hideLogin();
+          overlay.classList.add('hidden');
+
+          // Show session name in header
+          var sn = document.getElementById('loginSession').value.trim() || 'default';
+          sessionNameEl.textContent = sn;
+          sessionNameEl.style.display = '';
+
+          // Update URL
+          if (sn && sn !== 'default') {
+            try { history.replaceState(null, '', '?session=' + encodeURIComponent(sn)); } catch(e) {}
+          }
+
+          if (textOnlyMode) {
+            // Text-only: hide terminal and toolbars, show text-only panel
+            document.querySelector('.terminal-wrap').style.display = 'none';
+            document.getElementById('cmdPanel').style.display = 'none';
+            document.getElementById('promptBar').style.display = 'none';
+            document.querySelector('.key-toolbar').style.display = 'none';
+            // Highlight current session
+            toCurrentSession = lastSession || 'default';
+            toRefreshSessions();
+            document.getElementById('textonlyPanel').classList.add('active');
+            document.getElementById('toInput').focus();
+          } else {
+            // Terminal ready — init handler already manages buffering based on newSession flag
+            if (term) {
+              setTimeout(function() { fitTerminal(); term.focus(); }, 400);
+              setTimeout(function() { if (term) term.focus(); }, 1000);
+            }
+          }
+        } else {
+          // Authentication failed — clear saved password to prevent retry loop
+          lastPassword = '';
+          showLoginError(msg.message || 'Authentication failed.');
+        }
+        break;
+
+      case 'init':
+        // Terminal dimensions from server
+        if (term && msg.cols && msg.rows) {
+          term.resize(msg.cols, msg.rows);
+          dimensionsEl.textContent = `${msg.cols}\u00d7${msg.rows}`;
+        }
+        // Prompt mode from server config
+        if (msg.promptMode) {
+          promptMode = true;
+          document.getElementById('promptBar').classList.add('open');
+        }
+        if (msg.newSession) {
+          // New session: buffer output until terminal is fitted (avoids garbled startup)
+          termReady = false;
+          pendingOutput = [];
+          if (term && term.element) term.element.style.visibility = 'hidden';
+          setTimeout(function() {
+            if (term) term.reset();
+            fitTerminal();
+            termReady = true;
+            for (var pi = 0; pi < pendingOutput.length; pi++) {
+              if (term) term.write(pendingOutput[pi]);
+            }
+            pendingOutput = [];
+            if (term && term.element) term.element.style.visibility = '';
+            if (term) term.focus();
+          }, 500);
+          setTimeout(function() { fitTerminal(); }, 1500);
+        } else {
+          // Existing session: just fit, no buffering needed
+          termReady = true;
+          setTimeout(function() { fitTerminal(); if (term) term.focus(); }, 300);
+        }
+
+        // If no auth was required, we're good to go
+        if (!authRequired) {
+          authenticated = true;
+          setStatus('connected');
+          hideLogin();
+          overlay.classList.add('hidden');
+          if (term) term.focus();
+        }
+        break;
+
+      case 'disconnect':
+        // Server forced disconnect
+        authenticated = false;
+        if (msg.reason && msg.reason.includes('Blocked')) {
+          showLogin('Access blocked. Too many failed attempts.');
+          loginBtn.disabled = true;
+          loginBtn.textContent = 'Blocked';
+          // Parse block duration from reason (e.g. "Blocked for 5 minutes")
+          var blockMatch = msg.reason ? msg.reason.match(/(\d+)\s*minute/) : null;
+          var blockSecs = blockMatch ? parseInt(blockMatch[1]) * 60 : 300;
+          clearInterval(blockCountdownTimer);
+          blockCountdownTimer = setInterval(function() {
+            blockSecs--;
+            if (blockSecs > 0) {
+              var mins = Math.floor(blockSecs / 60);
+              var secs = blockSecs % 60;
+              loginInfo.textContent = 'Retry in ' + mins + ':' + (secs < 10 ? '0' : '') + secs;
+            } else {
+              clearInterval(blockCountdownTimer);
+              blockCountdownTimer = null;
+              loginBtn.disabled = false;
+              loginBtn.textContent = 'Connect';
+              loginInfo.textContent = 'You can try again now.';
+            }
+          }, 1000);
+        } else if (msg.reason && msg.reason.includes('timeout')) {
+          showLogin('Session timed out. Please log in again.');
+        } else if (msg.reason && (msg.reason.includes('Rate limit') || msg.reason.includes('rate limit'))) {
+          showLogin('Rate limit exceeded.');
+          loginBtn.disabled = true;
+          loginBtn.textContent = 'Rate Limited';
+          // Parse seconds from reason if available
+          var rateMatch = msg.reason ? msg.reason.match(/(\d+)\s*second/) : null;
+          var rateSecs = rateMatch ? parseInt(rateMatch[1]) : 60;
+          var rateTimer = setInterval(function() {
+            rateSecs--;
+            if (rateSecs > 0) {
+              loginInfo.textContent = 'Retry in ' + rateSecs + 's';
+            } else {
+              clearInterval(rateTimer);
+              loginBtn.disabled = false;
+              loginBtn.textContent = 'Connect';
+              loginInfo.textContent = 'You can try again now.';
+            }
+          }, 1000);
+        } else {
+          showLogin(msg.reason || 'Disconnected by server.');
+        }
+        break;
+
+      case 'process_exit':
+        authenticated = false;
+        overlay.classList.remove('hidden');
+        overlayText.textContent = 'Process exited (code: ' + (msg.code || 0) + '). Reconnect to restart.';
+        break;
+
+      case 'clients':
+        var cc = document.getElementById('clientCount');
+        if (msg.count > 1) {
+          cc.textContent = msg.count + ' clients';
+          cc.style.display = '';
+        } else {
+          cc.style.display = 'none';
+        }
+        break;
+
+      case 'session_expired':
+        authenticated = false;
+        overlay.classList.remove('hidden');
+        overlayText.textContent = 'Session expired due to inactivity.';
+        break;
+
+      case 'activity':
+        var dot = document.getElementById('activityDot');
+        if (authenticated) {
+          dot.style.display = 'inline-block';
+          dot.style.background = msg.active ? '#3fb950' : '#8b949e';
+          dot.title = msg.active ? 'Process active' : 'Process idle';
+        }
+        break;
+
+      case 'idle_warning':
+        document.getElementById('idleToast').style.display = 'flex';
+        document.getElementById('idleToastText').textContent =
+          'Session will expire in ' + (msg.minutes || 5) + ' minutes due to inactivity.';
+        break;
+
+      case 'sessions_update':
+        // Update admin mode session list in real time
+        if (msg.sessions) {
+          toServerSessions = msg.sessions;
+          if (textOnlyMode) toRefreshSessions();
+        }
+        break;
+
+      case 'ping':
+        // Reply with pong
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'pong' }));
+        }
+        break;
+
+      case 'schedules_update':
+        toCurrentSchedules = msg.schedules || [];
+        if (textOnlyMode) {
+          renderSchedules(toCurrentSchedules);
+        }
+        break;
+
+      default:
+        // Unknown message — write to terminal if authenticated
+        if (authenticated && term && raw) {
+          term.write(raw);
+        }
+    }
+  }
+
+  function sendInput(data) {
+    if (!ws || ws.readyState !== WebSocket.OPEN || !authenticated) return;
+    document.getElementById('idleToast').style.display = 'none';
+    ws.send(JSON.stringify({ type: 'input', data: data }));
+  }
+
+  function sendResize(cols, rows) {
+    if (!ws || ws.readyState !== WebSocket.OPEN || !authenticated) return;
+    ws.send(JSON.stringify({ type: 'resize', cols: cols, rows: rows }));
+  }
+
+  function scheduleReconnect() {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(function() {
+      if (!authenticated) connect();
+    }, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX);
+  }
+
+  // ── UI helpers ─────────────────────────────────────────────────────
+  function setStatus(state) {
+    statusBadge.className = 'status-badge ' + state;
+    const labels = {
+      connected: 'Connected',
+      disconnected: 'Disconnected',
+      connecting: 'Connecting...',
+      auth: 'Login Required'
+    };
+    statusText.textContent = labels[state] || state;
+    var pillDot = document.getElementById('pillDot');
+    var pillText = document.getElementById('pillText');
+    if (pillDot) {
+      pillDot.style.background = state === 'connected' ? 'var(--green)' : state === 'connecting' ? 'var(--accent)' : 'var(--red)';
+    }
+    if (pillText) {
+      pillText.textContent = labels[state] || state;
+    }
+  }
+
+  function debounce(fn, ms) {
+    let timer;
+    return function() {
+      clearTimeout(timer);
+      timer = setTimeout(fn, ms);
+    };
+  }
+
+  // ── Public API ─────────────────────────────────────────────────────
+  window.fitTerminal = function() {
+    if (fitAddon) {
+      fitAddon.fit();
+      if (term) dimensionsEl.textContent = `${term.cols}\u00d7${term.rows}`;
+    }
+  };
+
+  window.reconnect = function() {
+    authenticated = false;
+    authRequired = false;
+    if (ws) { ws.close(); ws = null; }
+    showLogin('Reconnecting...');
+    connect();
+  };
+
+  window.quickReconnect = function() {
+    authenticated = false;
+    authRequired = false;
+    reconnectDelay = RECONNECT_INITIAL;
+    overlay.classList.add('hidden');
+    if (ws) { ws.close(); ws = null; }
+    if (lastPassword) {
+      // Auto-reconnect with saved credentials
+      setStatus('connecting');
+      connect();
+    } else {
+      showLogin('Reconnecting...');
+      connect();
+    }
+  };
+
+  window.newSession = function() {
+    authenticated = false;
+    authRequired = false;
+    reconnectDelay = RECONNECT_INITIAL;
+    lastPassword = '';
+    textOnlyMode = false;
+    document.querySelector('.terminal-wrap').style.display = '';
+    document.getElementById('textonlyPanel').classList.remove('active');
+    document.getElementById('cmdPanel').style.display = '';
+    document.querySelector('.key-toolbar').style.display = '';
+    document.getElementById('promptBar').style.display = '';
+    if (ws) { ws.close(); ws = null; }
+    if (term) term.clear();
+    showLogin('Enter password to start a new session.');
+    connect();
+  };
+
+  // ── Paste support ───────────────────────────────────────────────────
+  function setupPasteHandler() {
+    document.addEventListener('paste', function(e) {
+      if (!authenticated || !term) return;
+      var active = document.activeElement;
+      if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT')) return;
+      e.preventDefault();
+      var text = (e.clipboardData || window.clipboardData).getData('text');
+      if (text) sendInput(text);
+    });
+
+    if (term) {
+      term.attachCustomKeyEventHandler(function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'f' && e.type === 'keydown') {
+          openSearch();
+          return false;
+        }
+        if (e.key === 'Escape' && e.type === 'keydown' && document.getElementById('searchBar').style.display !== 'none') {
+          closeSearch();
+          return false;
+        }
+        if ((e.ctrlKey || e.metaKey) && e.key === '/' && e.type === 'keydown') {
+          toggleHelp();
+          return false;
+        }
+        if ((e.ctrlKey || e.metaKey) && e.key === 'v' && e.type === 'keydown') {
+          return false;
+        }
+        if ((e.ctrlKey || e.metaKey) && e.key === 'c' && e.type === 'keydown' && term.hasSelection()) {
+          return false;
+        }
+        return true;
+      });
+    }
+  }
+
+  // ── Mobile key toolbar ──────────────────────────────────────────────
+  var stickyCtrl = false;
+
+  var keyMap = {
+    'Escape':     '\x1b',
+    'Tab':        '\t',
+    'Enter':      '\r',
+    'ArrowUp':    '\x1b[A',
+    'ArrowDown':  '\x1b[B',
+    'ArrowRight': '\x1b[C',
+    'ArrowLeft':  '\x1b[D',
+    'Home':       '\x1b[H',
+    'End':        '\x1b[F',
+    'PageUp':     '\x1b[5~',
+    'PageDown':   '\x1b[6~',
+    'Delete':     '\x1b[3~',
+    'Insert':     '\x1b[2~',
+    'clear':      '\x0c'
+  };
+
+  function setupKeyToolbar() {
+    var toolbar = document.getElementById('keyToolbar');
+    var btnCtrl = document.getElementById('btnCtrl');
+
+    function handleKeyPress(e) {
+      var btn = e.target.closest('.key-btn');
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Action buttons (copy, fontsize, etc.)
+      var action = btn.getAttribute('data-action');
+      if (action === 'fontdown') { changeFontSize(-1); if (term) term.focus(); return; }
+      if (action === 'fontup') { changeFontSize(1); if (term) term.focus(); return; }
+      if (action === 'togglecmd') { toggleCmdPanel(); if (term) term.focus(); return; }
+      if (action === 'toggleprompt') { togglePromptBar(); return; }
+      if (action === 'voice') { toggleVoice(); return; }
+      if (action === 'upload') { uploadFile(); return; }
+      if (action === 'snippets') { toggleSnippets(); return; }
+      if (action === 'copy') {
+        var sel = term ? term.getSelection() : '';
+        if (sel && navigator.clipboard) {
+          navigator.clipboard.writeText(sel).then(function() {
+            btn.textContent = 'Copied!';
+            setTimeout(function() { btn.textContent = 'Copy'; }, 1500);
+          });
+        }
+        if (term) term.focus();
+        return;
+      }
+
+      // Sticky Ctrl modifier
+      var mod = btn.getAttribute('data-modifier');
+      if (mod === 'ctrl') {
+        stickyCtrl = !stickyCtrl;
+        btnCtrl.classList.toggle('active', stickyCtrl);
+        if (term) term.focus();
+        return;
+      }
+
+      // Regular keys
+      var key = btn.getAttribute('data-key');
+      if (!key) return;
+
+      var seq = '';
+      if (stickyCtrl && key.length === 1) {
+        seq = String.fromCharCode(key.toUpperCase().charCodeAt(0) - 64);
+      } else {
+        seq = keyMap[key] || key;
+      }
+
+      sendInput(seq);
+
+      // Clear Ctrl after use
+      if (stickyCtrl) {
+        stickyCtrl = false;
+        btnCtrl.classList.remove('active');
+      }
+
+      if (term) term.focus();
+    }
+
+    // Use pointerdown — fires for both touch and mouse, not blocked by preventDefault
+    toolbar.addEventListener('pointerdown', handleKeyPress);
+    // Prevent focus stealing
+    toolbar.addEventListener('mousedown', function(e) { e.preventDefault(); });
+    toolbar.addEventListener('touchstart', function(e) { e.preventDefault(); }, { passive: false });
+  }
+
+  // ── Help modal ──────────────────────────────────────────────────────
+  window.toggleHelp = function() {
+    document.getElementById('helpModal').classList.toggle('hidden');
+  };
+  document.getElementById('helpModal').addEventListener('click', function(e) {
+    if (e.target === this) this.classList.add('hidden');
+  });
+
+  // ── Theme selector ──────────────────────────────────────────────────
+  var darkTermTheme = {
+    background: '#0d1117', foreground: '#c9d1d9', cursor: '#d4a574', cursorAccent: '#0d1117',
+    selectionBackground: '#264f78', selectionForeground: '#ffffff',
+    black: '#484f58', red: '#ff7b72', green: '#3fb950', yellow: '#d29922',
+    blue: '#58a6ff', magenta: '#bc8cff', cyan: '#39d353', white: '#b1bac4',
+    brightBlack: '#6e7681', brightRed: '#ffa198', brightGreen: '#56d364', brightYellow: '#e3b341',
+    brightBlue: '#79c0ff', brightMagenta: '#d2a8ff', brightCyan: '#56d364', brightWhite: '#f0f6fc'
+  };
+  var lightTermTheme = {
+    background: '#ffffff', foreground: '#1f2328', cursor: '#b35900', cursorAccent: '#ffffff',
+    selectionBackground: '#0969da30', selectionForeground: '#1f2328',
+    black: '#24292f', red: '#cf222e', green: '#1a7f37', yellow: '#9a6700',
+    blue: '#0969da', magenta: '#8250df', cyan: '#1b7c83', white: '#6e7781',
+    brightBlack: '#57606a', brightRed: '#a40e26', brightGreen: '#116329', brightYellow: '#7d4e00',
+    brightBlue: '#218bff', brightMagenta: '#a475f9', brightCyan: '#3192aa', brightWhite: '#8c959f'
+  };
+
+  function applyTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    document.getElementById('themeToggle').innerHTML = theme === 'light' ? '&#9788;' : '&#9789;';
+    if (term) {
+      term.options.theme = theme === 'light' ? lightTermTheme : darkTermTheme;
+    }
+    localStorage.setItem('ccr_theme', theme);
+  }
+
+  window.toggleTheme = function() {
+    var current = document.documentElement.getAttribute('data-theme') || 'dark';
+    applyTheme(current === 'dark' ? 'light' : 'dark');
+  };
+
+  // ── Session history (localStorage) ────────────────────────────────
+  var SESSION_STORAGE_KEY = 'ccr_recent_sessions';
+  var MAX_SESSIONS = 10;
+
+  function getRecentSessions() {
+    try { return JSON.parse(localStorage.getItem(SESSION_STORAGE_KEY) || '[]'); } catch(e) { return []; }
+  }
+
+  function saveSession(name) {
+    if (!name) return;
+    var sessions = getRecentSessions();
+    sessions = sessions.filter(function(s) { return s.name !== name; });
+    sessions.unshift({ name: name, date: new Date().toISOString() });
+    if (sessions.length > MAX_SESSIONS) sessions = sessions.slice(0, MAX_SESSIONS);
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(sessions));
+  }
+
+  function removeSession(name) {
+    var sessions = getRecentSessions();
+    sessions = sessions.filter(function(s) { return s.name !== name; });
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(sessions));
+    renderSessionList();
+  }
+
+  function escapeHtml(str) {
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function renderSessionList() {
+    var sessions = getRecentSessions();
+    var el = document.getElementById('sessionList');
+    if (!sessions.length) {
+      el.innerHTML = '<div style="padding:8px;color:var(--text-muted);font-size:12px;">No recent sessions</div>';
+      return;
+    }
+    var html = '';
+    sessions.forEach(function(s) {
+      var d = new Date(s.date);
+      var dateStr = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+      html += '<div class="session-item" onclick="selectSession(\'' + escapeHtml(s.name) + '\')">' +
+        '<span class="session-item-name">' + escapeHtml(s.name) + '</span>' +
+        '<span class="session-item-date">' + dateStr + '</span>' +
+        '<span class="session-item-del" onclick="event.stopPropagation(); removeSessionItem(\'' + escapeHtml(s.name) + '\')">&times;</span>' +
+        '</div>';
+    });
+    el.innerHTML = html;
+  }
+
+  window.toggleSessions = function() {
+    var list = document.getElementById('sessionList');
+    var btn = document.getElementById('toggleSessionList');
+    list.classList.toggle('open');
+    if (list.classList.contains('open')) {
+      renderSessionList();
+      btn.textContent = 'Close';
+    } else {
+      btn.textContent = 'Recent';
+    }
+  };
+
+  window.selectSession = function(name) {
+    document.getElementById('loginSession').value = name;
+    document.getElementById('sessionList').classList.remove('open');
+    document.getElementById('toggleSessionList').textContent = 'Recent';
+  };
+
+  window.removeSessionItem = function(name) {
+    removeSession(name);
+  };
+
+  // ── Scroll-to-bottom button ─────────────────────────────────────────
+  var scrollBtn = document.getElementById('scrollBottom');
+  var scrollPgUp = document.getElementById('scrollPgUp');
+  var scrollPgDn = document.getElementById('scrollPgDn');
+
+  window.scrollToBottom = function() {
+    if (term) term.scrollToBottom();
+  };
+
+  window.scrollPageUp = function() {
+    if (term) term.scrollPages(-1);
+  };
+
+  window.scrollPageDown = function() {
+    if (term) term.scrollPages(1);
+  };
+
+  function setupScrollButton() {
+    if (!term) return;
+    var viewport = term.element ? term.element.querySelector('.xterm-viewport') : null;
+    if (!viewport) return;
+
+    function checkScroll() {
+      var atTop = viewport.scrollTop <= 0;
+      var atBottom = viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 10;
+      scrollBtn.classList.toggle('visible', !atBottom);
+      scrollPgDn.classList.toggle('visible', !atBottom);
+      scrollPgUp.classList.toggle('visible', !atTop);
+    }
+
+    viewport.addEventListener('scroll', checkScroll);
+    term.onWriteParsed(checkScroll);
+  }
+
+  // ── Search ──────────────────────────────────────────────────────────
+  function openSearch() {
+    var bar = document.getElementById('searchBar');
+    bar.style.display = 'flex';
+    document.getElementById('searchInput').focus();
+  }
+  function closeSearch() {
+    document.getElementById('searchBar').style.display = 'none';
+    if (searchAddon) searchAddon.clearDecorations();
+    if (term) term.focus();
+  }
+  function doSearch() {
+    var q = document.getElementById('searchInput').value;
+    if (searchAddon && q) searchAddon.findNext(q, { caseSensitive: searchCaseSensitive });
+  }
+  window.searchNext = function() {
+    var q = document.getElementById('searchInput').value;
+    if (searchAddon && q) searchAddon.findNext(q, { caseSensitive: searchCaseSensitive });
+  };
+  window.searchPrev = function() {
+    var q = document.getElementById('searchInput').value;
+    if (searchAddon && q) searchAddon.findPrevious(q, { caseSensitive: searchCaseSensitive });
+  };
+  window.toggleSearchCase = function() {
+    searchCaseSensitive = !searchCaseSensitive;
+    document.getElementById('searchCaseBtn').classList.toggle('active', searchCaseSensitive);
+    doSearch();
+  };
+  window.closeSearch = closeSearch;
+  window.openSearch = openSearch;
+  window.doSearch = doSearch;
+
+  // ── Font size ─────────────────────────────────────────────────────
+  window.changeFontSize = function(delta) {
+    fontSize = Math.max(8, Math.min(28, fontSize + delta));
+    if (term) { term.options.fontSize = fontSize; fitTerminal(); }
+    localStorage.setItem('ccr_fontSize', fontSize);
+  };
+
+  // ── Fullscreen ──────────────────────────────────────────────────────
+  window.toggleFullscreen = function() {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(function(){});
+    } else {
+      document.exitFullscreen();
+    }
+  };
+  document.addEventListener('fullscreenchange', function() {
+    document.getElementById('fullscreenBtn').innerHTML = document.fullscreenElement ? '&#x2716;' : '&#x26F6;';
+    setTimeout(fitTerminal, 300);
+  });
+
+  // ── Download log ────────────────────────────────────────────────────
+  window.downloadLog = function() {
+    if (!term) return;
+    var buf = term.buffer.active;
+    var lines = [];
+    for (var i = 0; i < buf.length; i++) {
+      var line = buf.getLine(i);
+      if (line) lines.push(line.translateToString(true));
+    }
+    var text = lines.join('\n');
+    var blob = new Blob([text], { type: 'text/plain' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'terminal-log-' + new Date().toISOString().slice(0,19).replace(/:/g,'-') + '.txt';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // ── Notifications ───────────────────────────────────────────────────
+  var lastNotifyTime = 0;
+
+  function playBeep() {
+    try {
+      var ctx = new (window.AudioContext || window.webkitAudioContext)();
+      var osc = ctx.createOscillator();
+      var gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.value = 800;
+      gain.gain.value = 0.1;
+      osc.start();
+      osc.stop(ctx.currentTime + 0.1);
+    } catch(e) {}
+  }
+
+  function notifyActivity() {
+    var now = Date.now();
+    if (now - lastNotifyTime < 5000) return; // Throttle: max once per 5s
+    lastNotifyTime = now;
+
+    playBeep();
+
+    if (Notification.permission === 'granted') {
+      try {
+        new Notification('Claude Code Remote', { body: 'New terminal output', tag: 'ccr-activity' });
+      } catch(e) {}
+    }
+  }
+
+  window.toggleNotifications = function() {
+    notificationsEnabled = !notificationsEnabled;
+    localStorage.setItem('ccr_notifications', notificationsEnabled);
+    var btn = document.getElementById('bellToggle');
+    btn.classList.toggle('bell-on', notificationsEnabled);
+    btn.innerHTML = notificationsEnabled ? '&#128276;' : '&#128263;';
+    btn.title = notificationsEnabled ? 'Notifications ON (click to disable)' : 'Notifications OFF (click to enable)';
+    if (notificationsEnabled && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  };
+
+  window.dismissIdleToast = function() {
+    document.getElementById('idleToast').style.display = 'none';
+  };
+
+  // ── Drag & drop file paste ──────────────────────────────────────────
+  function setupDragDrop() {
+    var wrap = document.querySelector('.terminal-wrap');
+    var dropEl = document.getElementById('dropOverlay');
+    var dragCounter = 0;
+
+    wrap.addEventListener('dragenter', function(e) {
+      e.preventDefault();
+      dragCounter++;
+      dropEl.classList.remove('hidden');
+    });
+    wrap.addEventListener('dragleave', function(e) {
+      dragCounter--;
+      if (dragCounter <= 0) { dragCounter = 0; dropEl.classList.add('hidden'); }
+    });
+    wrap.addEventListener('dragover', function(e) {
+      e.preventDefault();
+    });
+    wrap.addEventListener('drop', function(e) {
+      e.preventDefault();
+      dragCounter = 0;
+      dropEl.classList.add('hidden');
+      if (!authenticated) return;
+      var files = e.dataTransfer.files;
+      if (files.length > 0) {
+        var reader = new FileReader();
+        reader.onload = function(ev) {
+          var text = ev.target.result;
+          if (text) sendInput(text);
+        };
+        reader.readAsText(files[0]);
+      }
+    });
+  }
+
+  // ── Cursor style ────────────────────────────────────────────────────
+  window.cycleCursor = function() {
+    cursorIndex = (cursorIndex + 1) % cursorStyles.length;
+    var style = cursorStyles[cursorIndex];
+    if (term) term.options.cursorStyle = style;
+    localStorage.setItem('ccr_cursor', style);
+    var btn = document.getElementById('cursorBtn');
+    btn.textContent = style === 'bar' ? '|' : style === 'block' ? '\u2588' : '_';
+  };
+
+  // ── Export as HTML ──────────────────────────────────────────────────
+  window.downloadHTML = function() {
+    if (!term) return;
+    var buf = term.buffer.active;
+    var html = '<!DOCTYPE html><html><head><meta charset="UTF-8">' +
+      '<title>Terminal Log</title>' +
+      '<style>body{background:#0d1117;color:#c9d1d9;font-family:monospace;font-size:14px;padding:16px;white-space:pre;line-height:1.3;}</style>' +
+      '</head><body>';
+    for (var i = 0; i < buf.length; i++) {
+      var line = buf.getLine(i);
+      if (line) {
+        var text = line.translateToString(true);
+        text = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        html += text + '\n';
+      }
+    }
+    html += '</body></html>';
+    var blob = new Blob([html], { type: 'text/html' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'terminal-' + new Date().toISOString().slice(0,19).replace(/:/g,'-') + '.html';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // ── Compact mode ────────────────────────────────────────────────────
+  window.toggleCompact = function() {
+    document.body.classList.toggle('compact');
+    setTimeout(fitTerminal, 200);
+  };
+
+  // ── Quick commands ──────────────────────────────────────────────────
+  window.sendCmd = function(cmd) {
+    sendInput(cmd + '\r');
+    if (term) term.focus();
+  };
+
+  window.toggleCmdPanel = function() {
+    document.getElementById('cmdPanel').classList.toggle('open');
+    setTimeout(fitTerminal, 100);
+  };
+
+  // ── Prompt input bar ────────────────────────────────────────────────
+  window.sendPrompt = function() {
+    var input = document.getElementById('promptInput');
+    var text = input.value;
+    if (!text) return;
+    sendInput(text + '\r');
+    input.value = '';
+    if (term) term.focus();
+  };
+
+  window.togglePromptBar = function() {
+    var bar = document.getElementById('promptBar');
+    bar.classList.toggle('open');
+    if (bar.classList.contains('open')) {
+      document.getElementById('promptInput').focus();
+    }
+    setTimeout(fitTerminal, 100);
+  };
+
+  // ── Voice input ─────────────────────────────────────────────────────
+  var voiceRecognition = null;
+  var voiceActive = false;
+
+  window.toggleVoice = function() {
+    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+      alert('Speech recognition not supported in this browser.');
+      return;
+    }
+
+    var btn = document.getElementById('voiceBtn');
+
+    if (voiceActive) {
+      if (voiceRecognition) voiceRecognition.stop();
+      voiceActive = false;
+      btn.classList.remove('recording');
+      return;
+    }
+
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    voiceRecognition = new SR();
+    voiceRecognition.continuous = false;
+    voiceRecognition.interimResults = false;
+    voiceRecognition.lang = 'en-US';
+
+    voiceRecognition.onstart = function() {
+      voiceActive = true;
+      btn.classList.add('recording');
+    };
+
+    voiceRecognition.onresult = function(event) {
+      var text = event.results[0][0].transcript;
+      if (text) sendInput(text);
+      voiceActive = false;
+      btn.classList.remove('recording');
+    };
+
+    voiceRecognition.onerror = function() {
+      voiceActive = false;
+      btn.classList.remove('recording');
+    };
+
+    voiceRecognition.onend = function() {
+      voiceActive = false;
+      btn.classList.remove('recording');
+    };
+
+    voiceRecognition.start();
+  };
+
+  // ── File upload ─────────────────────────────────────────────────────
+  window.uploadFile = function() {
+    var input = document.createElement('input');
+    input.type = 'file';
+    input.onchange = function() {
+      if (!input.files.length) return;
+      var file = input.files[0];
+      var xhr = new XMLHttpRequest();
+      var protocol = location.protocol;
+      var url = protocol + '//' + location.host + '/upload';
+      xhr.open('POST', url, true);
+      xhr.setRequestHeader('X-Filename', file.name);
+      xhr.onload = function() {
+        var toast = document.createElement('div');
+        toast.className = 'upload-toast';
+        if (xhr.status === 200) {
+          try {
+            var resp = JSON.parse(xhr.responseText);
+            toast.textContent = 'Uploaded: ' + resp.filename + ' (' + file.size + ' bytes)';
+          } catch(e) {
+            toast.textContent = 'File uploaded';
+          }
+        } else {
+          toast.style.borderColor = 'var(--red)';
+          toast.style.color = 'var(--red)';
+          toast.textContent = 'Upload failed: ' + xhr.statusText;
+        }
+        document.body.appendChild(toast);
+        setTimeout(function() { toast.remove(); }, 3000);
+      };
+      xhr.onerror = function() {
+        var toast = document.createElement('div');
+        toast.className = 'upload-toast';
+        toast.style.borderColor = 'var(--red)';
+        toast.style.color = 'var(--red)';
+        toast.textContent = 'Upload failed: network error';
+        document.body.appendChild(toast);
+        setTimeout(function() { toast.remove(); }, 3000);
+      };
+      xhr.send(file);
+    };
+    input.click();
+  };
+
+  // ── Snippets ────────────────────────────────────────────────────────
+  var SNIPPETS_KEY = 'ccr_snippets';
+
+  function getSnippets() {
+    try { return JSON.parse(localStorage.getItem(SNIPPETS_KEY) || '[]'); } catch(e) { return []; }
+  }
+
+  function saveSnippets(list) {
+    localStorage.setItem(SNIPPETS_KEY, JSON.stringify(list));
+  }
+
+  function renderSnippets() {
+    var list = getSnippets();
+    var el = document.getElementById('snippetsList');
+    el.innerHTML = '';
+    list.forEach(function(s, i) {
+      var item = document.createElement('div');
+      item.className = 'snippet-item';
+      item.innerHTML = '<span>' + s.replace(/</g, '&lt;') + '</span><span class="del" onclick="event.stopPropagation(); removeSnippet(' + i + ')">&times;</span>';
+      item.onclick = function() { sendInput(s + '\r'); toggleSnippets(); if (term) term.focus(); };
+      el.appendChild(item);
+    });
+  }
+
+  window.toggleSnippets = function() {
+    var popup = document.getElementById('snippetsPopup');
+    popup.classList.toggle('hidden');
+    if (!popup.classList.contains('hidden')) renderSnippets();
+  };
+
+  window.addSnippet = function() {
+    var input = document.getElementById('snippetInput');
+    var text = input.value.trim();
+    if (!text) return;
+    var list = getSnippets();
+    list.push(text);
+    saveSnippets(list);
+    input.value = '';
+    renderSnippets();
+  };
+
+  window.removeSnippet = function(index) {
+    var list = getSnippets();
+    list.splice(index, 1);
+    saveSnippets(list);
+    renderSnippets();
+  };
+
+  // ── Screenshot ──────────────────────────────────────────────────────
+  window.screenshotTerminal = function() {
+    if (!term || !term.element) return;
+    var canvas = term.element.querySelector('canvas');
+    if (!canvas) {
+      var viewport = term.element.querySelector('.xterm-screen');
+      if (!viewport) return;
+      var canvases = term.element.querySelectorAll('canvas');
+      if (canvases.length === 0) return;
+      var merged = document.createElement('canvas');
+      merged.width = canvases[0].width;
+      merged.height = canvases[0].height;
+      var ctx = merged.getContext('2d');
+      for (var i = 0; i < canvases.length; i++) {
+        ctx.drawImage(canvases[i], 0, 0);
+      }
+      canvas = merged;
+    }
+    canvas.toBlob(function(blob) {
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'terminal-' + new Date().toISOString().slice(0,19).replace(/:/g,'-') + '.png';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 'image/png');
+  };
+
+  // ── Text-only mode ──────────────────────────────────────────────────
+  var toCurrentSession = '';
+  var toServerSessions = [];
+  var toCurrentSchedules = [];
+
+  function toRefreshSessions() {
+    // Sessions are stored from auth_required message
+    var list = document.getElementById('toSessionList');
+    list.innerHTML = '';
+    if (toServerSessions.length === 0) {
+      // If no sessions known, show the current one
+      var btn = document.createElement('button');
+      btn.className = 'to-session-btn selected';
+      btn.textContent = lastSession || 'default';
+      toCurrentSession = lastSession || 'default';
+      list.appendChild(btn);
+      return;
+    }
+    toServerSessions.forEach(function(name) {
+      if (name.toLowerCase() === 'admin') return; // Hide admin session
+      var wrap = document.createElement('div');
+      wrap.style.cssText = 'display:inline-flex;align-items:center;gap:0;';
+      var btn = document.createElement('button');
+      btn.className = 'to-session-btn' + (name === toCurrentSession ? ' selected' : '');
+      btn.textContent = name;
+      btn.style.borderRadius = '8px 0 0 8px';
+      btn.onclick = function() { toSwitchSession(name); };
+      var closeBtn = document.createElement('button');
+      closeBtn.className = 'to-session-btn';
+      closeBtn.style.cssText = 'border-radius:0 8px 8px 0;border-left:none;color:var(--red);padding:6px 8px;font-size:14px;';
+      closeBtn.innerHTML = '&times;';
+      closeBtn.title = 'Close session';
+      closeBtn.onclick = function(e) { e.stopPropagation(); toCloseSession(name); };
+      wrap.appendChild(btn);
+      wrap.appendChild(closeBtn);
+      list.appendChild(wrap);
+    });
+    // If current session not in list, add it
+    if (toCurrentSession && toServerSessions.indexOf(toCurrentSession) === -1) {
+      var btn = document.createElement('button');
+      btn.className = 'to-session-btn selected';
+      btn.textContent = toCurrentSession;
+      list.appendChild(btn);
+    }
+  }
+
+  function toSwitchSession(name) {
+    if (name === toCurrentSession) return;
+    // Disconnect and reconnect to the new session
+    toCurrentSession = name;
+    lastSession = name;
+    // Close current connection and reconnect
+    authenticated = false;
+    authRequired = false;
+    if (ws) { ws.close(); ws = null; }
+    connect();
+    // The auth_required handler will auto-auth with lastPassword + lastSession
+  }
+
+  window.toSend = function() {
+    var input = document.getElementById('toInput');
+    var text = input.value;
+    if (!text) return;
+    // Send text first, then Enter separately so Claude Code processes it
+    sendInput(text);
+    setTimeout(function() { sendInput('\r'); }, 100);
+    input.value = '';
+    input.focus();
+  };
+
+  window.toSendCmd = function(cmd) {
+    sendInput(cmd);
+    setTimeout(function() { sendInput('\r'); }, 100);
+  };
+
+  window.toCloseSession = function(name) {
+    if (!confirm('Close session "' + name + '"? This will terminate the Claude Code process.')) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN || !authenticated) return;
+    ws.send(JSON.stringify({ type: 'close_session', name: name }));
+  };
+
+  // ── Scheduled sessions ──────────────────────────────────────────────
+  function renderSchedules(schedules) {
+    var el = document.getElementById('schedList');
+    if (!el) return;
+    if (!schedules || schedules.length === 0) {
+      el.innerHTML = '<div style="color:var(--text-muted);font-size:11px;margin-bottom:8px;">No scheduled sessions</div>';
+      return;
+    }
+    var html = '';
+    schedules.forEach(function(s) {
+      var t = new Date(s.startTime);
+      var timeStr = s.afterSession ? 'after: ' + s.afterSession : t.toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+      var promptPreview = s.prompt ? s.prompt.substring(0, 60) : '(no prompt)';
+      var started = s.started ? ' started' : '';
+      var statusLabel = s.started ? '<span style="color:var(--green);font-size:10px;margin-left:6px;">EXECUTED</span>' : '';
+      var delBtn = s.started ? '' : '<span class="sched-item-del" onclick="cancelSchedule(\'' + s.name.replace(/'/g,"\\'") + '\')" title="Cancel">&times;</span>';
+      html += '<div class="sched-item' + started + '">' +
+        '<div class="sched-item-info">' +
+          '<span class="sched-item-name">' + s.name.replace(/</g,'&lt;') + '</span>' + statusLabel +
+          '<span class="sched-item-time">' + timeStr + '</span>' +
+          '<div class="sched-item-prompt">' + promptPreview.replace(/</g,'&lt;') + '</div>' +
+        '</div>' +
+        delBtn +
+        '</div>';
+    });
+    el.innerHTML = html;
+  }
+
+  window.toggleSchedTrigger = function() {
+    var trigger = document.getElementById('schedTrigger').value;
+    document.getElementById('schedTime').style.display = trigger === 'time' ? '' : 'none';
+    document.getElementById('schedAfter').style.display = trigger === 'after' ? '' : 'none';
+    if (trigger === 'after') {
+      // Populate with active sessions + pending scheduled tasks
+      var sel = document.getElementById('schedAfter');
+      sel.innerHTML = '<option value="">Select session or task...</option>';
+      var added = {};
+      // Active sessions
+      toServerSessions.forEach(function(s) {
+        if (s.toLowerCase() !== 'admin' && !added[s]) {
+          var opt = document.createElement('option');
+          opt.value = s;
+          opt.textContent = s + ' (active)';
+          sel.appendChild(opt);
+          added[s] = true;
+        }
+      });
+      // Pending scheduled tasks
+      toCurrentSchedules.forEach(function(s) {
+        if (!s.started && !added[s.name] && s.name.toLowerCase() !== 'admin') {
+          var opt = document.createElement('option');
+          opt.value = s.name;
+          opt.textContent = s.name + ' (scheduled)';
+          sel.appendChild(opt);
+          added[s.name] = true;
+        }
+      });
+    }
+  };
+
+  window.scheduleSession = function() {
+    var name = document.getElementById('schedName').value.trim();
+    var trigger = document.getElementById('schedTrigger').value;
+    var time = document.getElementById('schedTime').value;
+    var afterSession = document.getElementById('schedAfter').value;
+    var prompt = document.getElementById('schedPrompt').value.trim();
+
+    if (!name) { alert('Session name is required.'); return; }
+    if (trigger === 'time' && !time) { alert('Start time is required.'); return; }
+    if (trigger === 'after' && !afterSession) { alert('Select a session to run after.'); return; }
+
+    if (!ws || ws.readyState !== WebSocket.OPEN || !authenticated) {
+      alert('Not connected.');
+      return;
+    }
+
+    var msg = {
+      type: 'schedule_session',
+      name: name,
+      prompt: prompt,
+      skipPerms: true
+    };
+    if (trigger === 'after') {
+      msg.afterSession = afterSession;
+      msg.startTime = '';
+    } else {
+      msg.startTime = time;
+      msg.afterSession = '';
+    }
+    ws.send(JSON.stringify(msg));
+
+    // Clear form
+    document.getElementById('schedName').value = '';
+    document.getElementById('schedTime').value = '';
+    document.getElementById('schedPrompt').value = '';
+  };
+
+  window.cancelSchedule = function(name) {
+    if (!ws || ws.readyState !== WebSocket.OPEN || !authenticated) return;
+    ws.send(JSON.stringify({
+      type: 'cancel_schedule',
+      name: name
+    }));
+  };
+
+  // ── Boot ───────────────────────────────────────────────────────────
+  // Apply saved theme
+  var savedTheme = localStorage.getItem('ccr_theme') || 'dark';
+  if (savedTheme === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+  }
+
+  initTerminal();
+  if (savedTheme === 'light') applyTheme('light');
+
+  // Parse session from URL
+  var urlParams = new URLSearchParams(window.location.search);
+  var urlSession = urlParams.get('session');
+  if (urlSession) {
+    document.getElementById('loginSession').value = urlSession;
+  }
+
+  setupScrollButton();
+  setupPasteHandler();
+  setupKeyToolbar();
+  setupDragDrop();
+
+  // Set default schedule time to now + 5 minutes
+  var schedTimeEl = document.getElementById('schedTime');
+  if (schedTimeEl) {
+    var now = new Date();
+    now.setMinutes(now.getMinutes() + 5);
+    schedTimeEl.value = now.toISOString().slice(0, 16);
+  }
+
+  document.getElementById('promptInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendPrompt();
+    }
+  });
+
+  document.getElementById('toInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      toSend();
+    }
+  });
+
+  document.getElementById('snippetInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') { e.preventDefault(); addSnippet(); }
+  });
+
+  // Init cursor button label
+  var cStyle = cursorStyles[cursorIndex];
+  document.getElementById('cursorBtn').textContent = cStyle === 'bar' ? '|' : cStyle === 'block' ? '\u2588' : '_';
+
+  connect();
+
+  // Mobile keyboard overlap fix
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', function() {
+      var lo = document.getElementById('loginOverlay');
+      if (!lo.classList.contains('hidden')) {
+        var card = lo.querySelector('.login-card');
+        var vpH = window.visualViewport.height;
+        var vpOff = window.visualViewport.offsetTop;
+        card.style.maxHeight = (vpH - 40) + 'px';
+        card.style.overflow = 'auto';
+        lo.style.height = vpH + 'px';
+        lo.style.top = vpOff + 'px';
+      }
+    });
+    window.visualViewport.addEventListener('scroll', function() {
+      var lo = document.getElementById('loginOverlay');
+      if (!lo.classList.contains('hidden')) {
+        lo.style.top = window.visualViewport.offsetTop + 'px';
+      }
+    });
+  }
+
+  // Init notification bell state
+  var bellBtn = document.getElementById('bellToggle');
+  bellBtn.classList.toggle('bell-on', notificationsEnabled);
+  bellBtn.innerHTML = notificationsEnabled ? '&#128276;' : '&#128263;';
+  bellBtn.title = notificationsEnabled ? 'Notifications ON (click to disable)' : 'Notifications OFF (click to enable)';
+
+})();
+</script>
+
+</body>
+</html>
